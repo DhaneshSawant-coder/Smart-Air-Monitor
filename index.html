@@ -12,7 +12,9 @@
   body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #f5f5f5; margin: 0; padding: 20px; }
   h1 { text-align: center; font-size: 26px; text-transform: uppercase; letter-spacing: 2px; border: 4px solid #f5f5f5; padding: 10px; max-width: 500px; margin: 0 auto 20px auto; background: #000; box-shadow: 8px 8px 0 #faff00; }
   #statusBanner { text-align: center; font-size: 20px; font-weight: 900; text-transform: uppercase; padding: 14px; border: 4px solid #000; margin: 0 auto 8px auto; max-width: 400px; color: #000; box-shadow: 8px 8px 0 #f5f5f5; }
-  #aqiLine { text-align: center; margin: 0 auto 20px auto; max-width: 400px; font-size: 14px; color: #999; text-transform: uppercase; }
+  #aqiLine { text-align: center; margin: 0 auto 5px auto; max-width: 400px; font-size: 14px; color: #999; text-transform: uppercase; }
+  #tempStatus, #humStatus { text-align: center; font-size: 12px; color: #999; text-transform: uppercase; }
+  #humStatus { margin-bottom: 15px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 15px; max-width: 500px; margin: 0 auto 20px auto; }
   .card { background: #000; border: 4px solid #f5f5f5; padding: 16px; text-align: center; box-shadow: 6px 6px 0 #00ff85; }
   .card .value { font-size: 24px; font-weight: 900; margin: 6px 0; }
@@ -25,6 +27,7 @@
   .navRow { max-width: 500px; margin: 0 auto 20px auto; display: flex; gap: 12px; }
   .navBtn { flex: 1; text-align: center; background: #faff00; color: #000; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; padding: 16px 0; border: 4px solid #000; cursor: pointer; font-size: 14px; box-shadow: 6px 6px 0 #f5f5f5; font-family: 'Courier New', monospace; }
   .navBtn.alt { background: #00ff85; }
+  .fullBtn { display: block; width: 100%; max-width: 500px; margin: 0 auto 20px auto; text-align: center; background: #c400ff; color: #fff; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; padding: 16px 0; border: 4px solid #000; cursor: pointer; font-size: 14px; box-shadow: 6px 6px 0 #f5f5f5; font-family: 'Courier New', monospace; }
   #historySection { display: none; max-width: 700px; margin: 0 auto; }
   #searchBox { display: block; width: 100%; padding: 12px; border: 4px solid #f5f5f5; background: #000; color: #f5f5f5; font-size: 16px; margin-bottom: 15px; font-family: 'Courier New', monospace; }
   table { width: 100%; border-collapse: collapse; background: #000; border: 4px solid #f5f5f5; }
@@ -38,6 +41,10 @@
   <h1>Air Quality Monitor</h1>
   <div id="statusBanner">LOADING...</div>
   <div id="aqiLine">AQI: -- &nbsp; TREND: --</div>
+  <div id="tempStatus">TEMP STATUS: --</div>
+  <div id="humStatus">HUMIDITY STATUS: --</div>
+
+  <button class="fullBtn" onclick="enableAlerts()">🔔 ENABLE ALERTS</button>
 
   <div id="liveSection">
     <div class="grid">
@@ -70,18 +77,47 @@
   </div>
 
 <script>
+  let swRegistration = null;
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(e => console.log('SW failed', e));
+    navigator.serviceWorker.register('sw.js').then(reg => { swRegistration = reg; }).catch(e => console.log('SW failed', e));
   }
-  if ('Notification' in window) { Notification.requestPermission(); }
-  let lastNotified = null;
-  function maybeNotify(status) {
-    if (status !== 'GOOD' && status !== 'MODERATE' && status !== lastNotified) {
-      if (Notification.permission === 'granted') {
-        new Notification('Air Quality Alert', { body: 'Status: ' + status });
+
+  function enableAlerts() {
+    if (!('Notification' in window)) { alert('Notifications not supported on this browser.'); return; }
+    Notification.requestPermission().then(perm => {
+      if (perm === 'granted') {
+        showNotif('Alerts Enabled', 'You will be notified when air quality, temperature, or humidity becomes unhealthy.');
+      } else {
+        alert('Permission not granted. You can enable it later in your browser site settings.');
       }
+    });
+  }
+
+  function showNotif(title, body) {
+    if (Notification.permission !== 'granted') return;
+    if (swRegistration) { swRegistration.showNotification(title, { body: body }); }
+    else { new Notification(title, { body: body }); }
+  }
+
+  let lastAqiNotified = null;
+  let lastTempNotified = null;
+  let lastHumNotified = null;
+
+  function maybeNotify(aqiStatus, tempStatus, humStatus) {
+    if (aqiStatus !== 'GOOD' && aqiStatus !== 'MODERATE' && aqiStatus !== lastAqiNotified) {
+      showNotif('Air Quality Alert', 'Status: ' + aqiStatus);
     }
-    lastNotified = status;
+    lastAqiNotified = aqiStatus;
+
+    if ((tempStatus === 'HOT' || tempStatus === 'DANGEROUS HEAT') && tempStatus !== lastTempNotified) {
+      showNotif('Temperature Alert', 'Status: ' + tempStatus);
+    }
+    lastTempNotified = tempStatus;
+
+    if ((humStatus === 'HIGH HUMIDITY' || humStatus === 'VERY HUMID') && humStatus !== lastHumNotified) {
+      showNotif('Humidity Alert', 'Status: ' + humStatus);
+    }
+    lastHumNotified = humStatus;
   }
 
   const CHANNEL_ID = "3482328";
@@ -107,6 +143,23 @@
     return { aqi: 500, category: "HAZARDOUS", color: "#7a0026" };
   }
 
+  function getTempStatus(t) {
+    if (t < 10) return { cat: 'COLD', color: '#38bdf8' };
+    if (t < 18) return { cat: 'COOL', color: '#00ff85' };
+    if (t < 30) return { cat: 'COMFORTABLE', color: '#00ff85' };
+    if (t < 35) return { cat: 'WARM', color: '#faff00' };
+    if (t < 40) return { cat: 'HOT', color: '#ff9900' };
+    return { cat: 'DANGEROUS HEAT', color: '#ff003c' };
+  }
+
+  function getHumStatus(h) {
+    if (h < 30) return { cat: 'DRY', color: '#faff00' };
+    if (h < 60) return { cat: 'COMFORTABLE', color: '#00ff85' };
+    if (h < 70) return { cat: 'HUMID', color: '#faff00' };
+    if (h < 85) return { cat: 'HIGH HUMIDITY', color: '#ff9900' };
+    return { cat: 'VERY HUMID', color: '#ff003c' };
+  }
+
   const ctx = document.getElementById('pmChart').getContext('2d');
   const chart = new Chart(ctx, {
     type: 'line',
@@ -130,13 +183,23 @@
       allRows = feeds.map(f => ({ time: f.created_at, pm1: f.field1, pm25: f.field2, pm10: f.field3, temp: f.field4, hum: f.field5 }));
       const latest = allRows[allRows.length - 1];
       const pm25 = parseFloat(latest.pm25) || 0;
+      const tempVal = parseFloat(latest.temp) || 0;
+      const humVal = parseFloat(latest.hum) || 0;
       const aq = calculateAQI(pm25);
+      const ts = getTempStatus(tempVal);
+      const hs = getHumStatus(humVal);
 
       document.getElementById('pm1').innerText = latest.pm1;
       document.getElementById('pm25').innerText = latest.pm25;
       document.getElementById('pm10').innerText = latest.pm10;
-      document.getElementById('temp').innerText = latest.temp;
-      document.getElementById('hum').innerText = latest.hum;
+
+      const tempCard = document.getElementById('temp');
+      tempCard.innerText = latest.temp;
+      tempCard.style.color = ts.color;
+
+      const humCard = document.getElementById('hum');
+      humCard.innerText = latest.hum;
+      humCard.style.color = hs.color;
 
       const banner = document.getElementById('statusBanner');
       banner.innerText = aq.category;
@@ -149,6 +212,8 @@
       }
       previousPM25 = pm25;
       document.getElementById('aqiLine').innerText = 'AQI: ' + aq.aqi + '   TREND: ' + arrows[trend];
+      document.getElementById('tempStatus').innerText = 'TEMP STATUS: ' + ts.cat;
+      document.getElementById('humStatus').innerText = 'HUMIDITY STATUS: ' + hs.cat;
 
       const pm25Values = allRows.map(r => parseFloat(r.pm25) || 0);
       document.getElementById('dayMin').innerText = Math.min(...pm25Values);
@@ -165,7 +230,7 @@
       chart.update();
 
       renderTable(allRows);
-      maybeNotify(aq.category);
+      maybeNotify(aq.category, ts.cat, hs.cat);
     } catch (e) { console.log('Fetch failed', e); }
   }
 
