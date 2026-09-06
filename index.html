@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AIR QUALITY MONITOR</title>
 <link rel="manifest" href="manifest.json">
- <link rel="icon" type="image/png" href="favicon-32.png">
+<link rel="icon" type="image/png" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="theme-color" content="#0a0a0a">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -88,7 +88,7 @@
     if (!('Notification' in window)) { alert('Notifications not supported on this browser.'); return; }
     Notification.requestPermission().then(perm => {
       if (perm === 'granted') {
-        showNotif('Alerts Enabled', 'You will be notified when air quality, temperature, or humidity becomes unhealthy.');
+        showNotif('Alerts Enabled', 'You will be notified about air quality, temperature, and humidity updates.');
       } else {
         alert('Permission not granted. You can enable it later in your browser site settings.');
       }
@@ -105,9 +105,18 @@
   let lastTempNotified = null;
   let lastHumNotified = null;
 
+  function getAqiMessage(status) {
+    if (status === 'GOOD') return "Air is healthy today. Great time to open windows!";
+    if (status === 'MODERATE') return "Air quality is at a moderate level today.";
+    if (status === 'UNHEALTHY (SENSITIVE)') return "Air may affect sensitive groups today.";
+    if (status === 'UNHEALTHY') return "Air quality is unhealthy right now.";
+    if (status === 'VERY UNHEALTHY') return "Air quality is very unhealthy. Limit outdoor exposure.";
+    return "Air quality is hazardous. Avoid outdoor exposure.";
+  }
+
   function maybeNotify(aqiStatus, tempStatus, humStatus) {
-    if (aqiStatus !== 'GOOD' && aqiStatus !== 'MODERATE' && aqiStatus !== lastAqiNotified) {
-      showNotif('Air Quality Alert', 'Status: ' + aqiStatus);
+    if (aqiStatus !== lastAqiNotified) {
+      showNotif('Air Quality Update: ' + aqiStatus, getAqiMessage(aqiStatus));
     }
     lastAqiNotified = aqiStatus;
 
