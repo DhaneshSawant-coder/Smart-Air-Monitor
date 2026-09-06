@@ -4,16 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AIR QUALITY MONITOR</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0a0a">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; }
   body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #f5f5f5; margin: 0; padding: 20px; }
   h1 { text-align: center; font-size: 26px; text-transform: uppercase; letter-spacing: 2px; border: 4px solid #f5f5f5; padding: 10px; max-width: 500px; margin: 0 auto 20px auto; background: #000; box-shadow: 8px 8px 0 #faff00; }
-  #statusBanner { text-align: center; font-size: 22px; font-weight: 900; text-transform: uppercase; padding: 14px; border: 4px solid #000; margin: 0 auto 20px auto; max-width: 400px; color: #000; box-shadow: 8px 8px 0 #f5f5f5; }
+  #statusBanner { text-align: center; font-size: 20px; font-weight: 900; text-transform: uppercase; padding: 14px; border: 4px solid #000; margin: 0 auto 8px auto; max-width: 400px; color: #000; box-shadow: 8px 8px 0 #f5f5f5; }
+  #aqiLine { text-align: center; margin: 0 auto 20px auto; max-width: 400px; font-size: 14px; color: #999; text-transform: uppercase; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 15px; max-width: 500px; margin: 0 auto 20px auto; }
   .card { background: #000; border: 4px solid #f5f5f5; padding: 16px; text-align: center; box-shadow: 6px 6px 0 #00ff85; }
   .card .value { font-size: 24px; font-weight: 900; margin: 6px 0; }
   .card .label { font-size: 11px; color: #999; text-transform: uppercase; letter-spacing: 1px; }
+  .statsRow { display: flex; gap: 10px; max-width: 500px; margin: 0 auto 20px auto; }
+  .statBox { flex: 1; background: #000; border: 4px solid #f5f5f5; padding: 10px; text-align: center; box-shadow: 4px 4px 0 #faff00; }
+  .statBox .val { font-size: 18px; font-weight: 900; }
+  .statBox .lbl { font-size: 10px; color: #999; text-transform: uppercase; }
   #chartBox { max-width: 600px; margin: 0 auto 20px auto; background: #000; border: 4px solid #f5f5f5; padding: 15px; box-shadow: 8px 8px 0 #ff003c; }
   .navRow { max-width: 500px; margin: 0 auto 20px auto; display: flex; gap: 12px; }
   .navBtn { flex: 1; text-align: center; background: #faff00; color: #000; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; padding: 16px 0; border: 4px solid #000; cursor: pointer; font-size: 14px; box-shadow: 6px 6px 0 #f5f5f5; font-family: 'Courier New', monospace; }
@@ -30,6 +37,7 @@
 <body>
   <h1>Air Quality Monitor</h1>
   <div id="statusBanner">LOADING...</div>
+  <div id="aqiLine">AQI: -- &nbsp; TREND: --</div>
 
   <div id="liveSection">
     <div class="grid">
@@ -38,6 +46,11 @@
       <div class="card"><div class="value" id="pm10">--</div><div class="label">PM10 UG/M3</div></div>
       <div class="card"><div class="value" id="temp">--</div><div class="label">TEMP C</div></div>
       <div class="card"><div class="value" id="hum">--</div><div class="label">HUMIDITY %</div></div>
+    </div>
+    <div class="statsRow">
+      <div class="statBox"><div class="val" id="dayMin">--</div><div class="lbl">Session Min</div></div>
+      <div class="statBox"><div class="val" id="dayMax">--</div><div class="lbl">Session Max</div></div>
+      <div class="statBox"><div class="val" id="dayAvg">--</div><div class="lbl">Session Avg</div></div>
     </div>
     <div id="chartBox"><canvas id="pmChart" height="180"></canvas></div>
     <div class="lastUpdated" id="lastUpdated"></div>
@@ -57,31 +70,55 @@
   </div>
 
 <script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(e => console.log('SW failed', e));
+  }
+  if ('Notification' in window) { Notification.requestPermission(); }
+  let lastNotified = null;
+  function maybeNotify(status) {
+    if (status !== 'GOOD' && status !== 'MODERATE' && status !== lastNotified) {
+      if (Notification.permission === 'granted') {
+        new Notification('Air Quality Alert', { body: 'Status: ' + status });
+      }
+    }
+    lastNotified = status;
+  }
+
   const CHANNEL_ID = "3482328";
   const READ_URL = `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?results=50`;
   let allRows = [];
+  let previousPM25 = null;
 
-  function getStatus(pm) {
-    if (pm <= 12) return "GOOD";
-    if (pm <= 35) return "MODERATE";
-    if (pm <= 55) return "UNHEALTHY (SENSITIVE)";
-    if (pm <= 150) return "UNHEALTHY";
-    return "HAZARDOUS";
-  }
-  function getColor(pm) {
-    if (pm <= 12) return "#00ff85";
-    if (pm <= 35) return "#faff00";
-    if (pm <= 55) return "#ff9900";
-    if (pm <= 150) return "#ff003c";
-    return "#c400ff";
+  function calculateAQI(pm) {
+    const table = [
+      [0.0, 12.0, 0, 50, "GOOD", "#00ff85"],
+      [12.1, 35.4, 51, 100, "MODERATE", "#faff00"],
+      [35.5, 55.4, 101, 150, "UNHEALTHY (SENSITIVE)", "#ff9900"],
+      [55.5, 150.4, 151, 200, "UNHEALTHY", "#ff003c"],
+      [150.5, 250.4, 201, 300, "VERY UNHEALTHY", "#c400ff"],
+      [250.5, 500.4, 301, 500, "HAZARDOUS", "#7a0026"]
+    ];
+    for (const [cLow, cHigh, aLow, aHigh, cat, color] of table) {
+      if (pm >= cLow && pm <= cHigh) {
+        const aqi = Math.round(((aHigh - aLow) / (cHigh - cLow)) * (pm - cLow) + aLow);
+        return { aqi, category: cat, color };
+      }
+    }
+    return { aqi: 500, category: "HAZARDOUS", color: "#7a0026" };
   }
 
   const ctx = document.getElementById('pmChart').getContext('2d');
   const chart = new Chart(ctx, {
     type: 'line',
-    data: { labels: [], datasets: [{ label: 'PM2.5', data: [], borderColor: '#faff00', backgroundColor: 'rgba(250,255,0,0.1)', fill: true, tension: 0, pointRadius: 2, borderWidth: 3 }] },
+    data: { labels: [], datasets: [
+      { label: 'PM1.0', data: [], borderColor: '#00ff85', fill: false, borderWidth: 2, pointRadius: 1 },
+      { label: 'PM2.5', data: [], borderColor: '#faff00', fill: false, borderWidth: 3, pointRadius: 2 },
+      { label: 'PM10', data: [], borderColor: '#ff003c', fill: false, borderWidth: 2, pointRadius: 1 }
+    ] },
     options: { animation: false, scales: { x: { ticks: { color: '#999' }, grid: { color: '#333' } }, y: { ticks: { color: '#999' }, grid: { color: '#333' }, beginAtZero: true } }, plugins: { legend: { labels: { color: '#f5f5f5' } } } }
   });
+
+  const arrows = { UP: '↑', DOWN: '↓', SAME: '→' };
 
   async function fetchData() {
     try {
@@ -93,6 +130,7 @@
       allRows = feeds.map(f => ({ time: f.created_at, pm1: f.field1, pm25: f.field2, pm10: f.field3, temp: f.field4, hum: f.field5 }));
       const latest = allRows[allRows.length - 1];
       const pm25 = parseFloat(latest.pm25) || 0;
+      const aq = calculateAQI(pm25);
 
       document.getElementById('pm1').innerText = latest.pm1;
       document.getElementById('pm25').innerText = latest.pm25;
@@ -101,17 +139,33 @@
       document.getElementById('hum').innerText = latest.hum;
 
       const banner = document.getElementById('statusBanner');
-      banner.innerText = getStatus(pm25);
-      banner.style.background = getColor(pm25);
+      banner.innerText = aq.category;
+      banner.style.background = aq.color;
+
+      let trend = 'SAME';
+      if (previousPM25 !== null) {
+        if (pm25 > previousPM25) trend = 'UP';
+        else if (pm25 < previousPM25) trend = 'DOWN';
+      }
+      previousPM25 = pm25;
+      document.getElementById('aqiLine').innerText = 'AQI: ' + aq.aqi + '   TREND: ' + arrows[trend];
+
+      const pm25Values = allRows.map(r => parseFloat(r.pm25) || 0);
+      document.getElementById('dayMin').innerText = Math.min(...pm25Values);
+      document.getElementById('dayMax').innerText = Math.max(...pm25Values);
+      document.getElementById('dayAvg').innerText = (pm25Values.reduce((a, b) => a + b, 0) / pm25Values.length).toFixed(1);
 
       document.getElementById('lastUpdated').innerText = "LAST UPDATED: " + new Date(latest.time).toLocaleString();
 
       const last20 = allRows.slice(-20);
       chart.data.labels = last20.map(r => new Date(r.time).toLocaleTimeString());
-      chart.data.datasets[0].data = last20.map(r => parseFloat(r.pm25) || 0);
+      chart.data.datasets[0].data = last20.map(r => parseFloat(r.pm1) || 0);
+      chart.data.datasets[1].data = last20.map(r => parseFloat(r.pm25) || 0);
+      chart.data.datasets[2].data = last20.map(r => parseFloat(r.pm10) || 0);
       chart.update();
 
       renderTable(allRows);
+      maybeNotify(aq.category);
     } catch (e) { console.log('Fetch failed', e); }
   }
 
@@ -127,8 +181,7 @@
 
   document.getElementById('searchBox').addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
-    if (q === '') { renderTable(allRows); return; }
-    renderTable(allRows.filter(r => new Date(r.time).toLocaleString().toLowerCase().includes(q)));
+    renderTable(q === '' ? allRows : allRows.filter(r => new Date(r.time).toLocaleString().toLowerCase().includes(q)));
   });
 
   function showLive() {
